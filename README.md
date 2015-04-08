@@ -5,7 +5,7 @@ Compiled using [spasm](https://wabbit.codeplex.com/) with `spasm invaders.z80 in
 
 Tested with the [wabbitemu](https://wabbit.codeplex.com/) emulator
 
-####Todo
+####TODO
 
 * Add new/more invader sprite art
 * Levels
