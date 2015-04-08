@@ -1,9 +1,17 @@
 # TI-83-SpaceInvaders
 A simple Space Invaders clone for the ti83/84 calculators
 
-Compiled using [spasm](https://wabbit.codeplex.com/) with `spasm invaders.z80 invaders.8xp`
+####Usage
 
-Tested with the [wabbitemu](https://wabbit.codeplex.com/) emulator
+* Compile with [spasm](https://wabbit.codeplex.com/) with `spasm invaders.z80 invaders.8xp`
+* Tested with the [wabbitemu](https://wabbit.codeplex.com/) emulator
+
+######To run: 
+1. Send to a ti83+/84+SE calculator using [TI-Connect](http://education.ti.com/en/us/products/computer_software/connectivity-software/ti-connect-software/tabs/overview)
+2. Press `2nd`then `0` to open the catalog
+3. Scroll down to `Asm(` and press `Enter`
+4. Press the `PRGM` button and scroll down to `INVADERS`
+5. Press `Enter` and the program will start running
 
 ####TODO
 
