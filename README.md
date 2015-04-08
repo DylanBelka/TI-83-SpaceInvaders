@@ -13,6 +13,12 @@ A simple Space Invaders clone for the ti83/84 calculators
 4. Press the `PRGM` button and scroll down to `INVADERS`
 5. Press `Enter` and the program will start running
 
+######In-Game controls
+* `Left` - move left
+* `Right`- moves right
+* `2nd` - shoot
+* `Clear` - Quit
+
 ####TODO
 
 * Add new/more invader sprite art
