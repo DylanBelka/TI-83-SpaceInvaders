@@ -5,6 +5,14 @@ Compiled using [spasm](https://wabbit.codeplex.com/) with `spasm invaders.z80 in
 
 Tested with the [wabbitemu](https://wabbit.codeplex.com/) emulator
 
+####TODO
+
+* Add new/more invader sprite art
+* Levels
+* Fix invaders speed up bug
+* Reimplement bullet walls
+* Fix collision detection bug
+
 ####Dependencies
 
 * Uses Sean McLaughlin's ClipSprXOR subroutine for displaying sprites (included in source)
