@@ -1,0 +1,1305 @@
+.nolist
+#include "ti83plus.inc"
+.list
+
+#define SCREEN_WIDTH			96
+#define SCREEN_HEIGHT			64
+	
+#define SCREEN_BOTTOM			SCREEN_HEIGHT - 1
+#define SCREEN_TOP				0
+#define SCREEN_LEFT				0
+#define SCREEN_RIGHT			SCREEN_WIDTH - 1
+	
+#define INVDR_SHIFT_LEFT		SCREEN_LEFT			; when invaders shift down from the left
+#define INVDR_SHIFT_RIGHT		SCREEN_RIGHT - 5	; when invaders shift down from the right
+	
+#define INVDR_LENGTH			5
+#define INVDR_HEIGHT			3
+	
+#define NUM_INVADERS			24					; number of invaders
+#define NUM_INVDR_BULLETS		6					; max number of invader bullets
+#define INVDR_BULLET_HEIGHT		3
+#define INVDR_BULLET_LENGTH		2
+
+#define WALL_Y_POSITION			50					; constant bullet wall y position
+#define NUM_WALLS				9
+
+#define WALL_HEALTH_HIGH		10					; greater than or equal to 10
+#define WALL_HEALTH_HALF		5					; greater than or equal to 5 but less than 10
+	
+#define BULLET_LENGTH			2
+#define BULLET_HEIGHT			2
+
+#define PLAYER_LENGTH			7
+#define PLAYER_HEIGHT			6
+
+#define  ProgStart    			$9D95
+
+.org 	ProgStart - 2
+.db    t2ByteTok, tasmCmp
+
+; Space Invaders clone for the ti83-84 calculators
+
+; Main program done by Dylan Belka
+; Sprite display subroutine done by Sean McLaughlin of the Learn TI-83 Plus Assembly In 28 Days tutorial
+; Rand8 subroutine created by Nich, Octoate, PulkoMandy at http://www.cpcwiki.eu/index.php/Programming:Random_Number_Generator
+; ti83plus.inc created by Texas Instruments and modified for use with spasm by unknown
+
+; Final program size on a ti84+: 1,688 bytes
+; Assembled using the spasm assembler usage: spasm invaders.z80 invaders.8xp
+; File created: ‎Saturday, ‎January ‎24, ‎2015, ‏‎12:27:14 PM
+; Version 1.0 assembled: Wednesday, March ‎25, ‎2015, ~9:20-ish
+
+; TODO: 
+; multiple invaders?
+; levels 
+; optimize
+; SPEED UP
+; reimplement bullet walls
+; Fix collision detection 
+; ^ Problem being that collisions are not detected on the left half of the sprite 
+
+; *** 			
+; = = = = = = = = = =
+; = = = = = = = = = =
+; '				'
+;		'
+; ---	---		---
+;
+;		 .
+;		...
+
+; for levels:
+; define all locations of invaders
+; then to choose the level
+; just change the number of invaders (NUM_INVADERS)
+
+; main game menu
+menu:
+	b_call _ClrLCDFull
+	b_call _RunIndicOff
+	b_call _GrBufClr
+
+	res DonePrgm, (IY + DoneFlags)	; removes the done when the program ends
+	res GrfGrid, (IY + GrfDBFlags)	; graph grid not drawn
+	set GrfNoAxis, (IY + GrfDBFlags); no graph axis
+	
+	; display game name
+	ld a, 0				; row = y
+	ld (CurRow), a		; col = x
+	ld a, 4
+	ld (CurCol), a
+	ld hl, nameStr
+	b_call _PutS
+	
+	; display :^)
+	ld a, 25
+	ld (PenCol), a
+	ld a, 10
+	ld (PenRow), a
+	ld hl, dankMemerStr
+	b_call _VPuts
+
+	; display instructions
+	ld a, 14
+	ld (PenCol), a
+	ld a, 24
+	ld (PenRow), a
+	ld hl, startStr
+	b_call _VPutS
+	
+	ld a, 14
+	ld (PenCol), a
+	ld a, 34
+	ld (PenRow), a
+	ld hl, quitStr
+	b_call _VPuts
+	
+	; display Score: 
+	ld a, 14
+	ld (PenCol), a
+	ld a, 44
+	ld (PenRow), a
+	
+	ld hl, scoreStr
+	b_call _VPuts
+	
+	; display the player's score
+	ld a, 6
+	ld (CurRow), a
+	ld (CurCol), a
+	
+	ld hl, (score)
+	b_call _DispHL
+	
+menu_wait_key:
+	b_call _GetKey ; no need for fancy port-input handling
+	
+	cp kEnter
+	jp z, init
+	
+	cp kClear
+	jp z, exit
+	
+	jp menu_wait_key ; loop
+
+init:	; clear buffers, display, initializes sprite values
+	; reset player positions
+	ld a, 48
+	ld (playerX), a
+	ld a, 58
+	ld (playerY), a
+	
+	; reset bullet positions
+	ld a, 100
+	ld (bulletX), a
+	ld (bulletY), a
+	
+	; player starts with 3 lives
+	ld a, 3
+	ld (playerLives), a
+	
+	; invaders speed up every 5 kills
+	ld a, 5
+	ld (invaderSpeedUp), a
+	
+	; reset invaderUpdateInterval and updateInvaders
+	ld a, 20
+	ld (updateInvaders), a		; update the invaders in the first frame
+	ld (invaderUpdateInterval), a
+	
+	; initialize number of invaders in a variable
+	ld a, NUM_INVADERS
+	ld (invadersRemaining), a
+	
+	; set number of invaders killed to 0
+	xor a
+	ld (invadersKilled), a
+	; reset score
+	ld hl, 0
+	ld (score), hl
+	
+	ld a, 1
+	ld (canShoot), a
+	
+	ld (maxBullets), a ; start with just 1 invader bullet
+	
+	call reset_invaders
+	
+; ------------------------------------------------------------
+; ----------------------- MAIN PROGRAM -----------------------
+; ------------------------------------------------------------
+
+main:
+draw:
+	b_call _GrBufClr ; clear the screen
+	; draw everything
+	call drawPlayer
+	call drawBullet
+	call drawInvaders
+	call drawInvaderBullets
+	call drawLives
+	call drawWalls
+	b_call _GrBufCpy ; show the screen
+	
+; update positions, check for collisions 
+update:	
+	; move the bullet
+	ld a, (bulletY)
+	sub 2
+	ld (bulletY), a
+	
+	; has the bullet hit the top of the screen?
+	; screen top = 0 (or a is faster than cp 0)
+	or a
+	call z, bulletHitTop
+	
+	; update the invaders this frame?
+	; if no, jump to noUpdate
+	; else update them
+	ld a, (invaderUpdateInterval)
+	ld d, a
+	ld a, (updateInvaders)
+	cp d
+	jp nz, noUpdate
+	
+	; update
+	xor a
+	ld (updateInvaders), a
+	ld (loopControl), a
+	
+	; x = d
+	; y = e
+	; hl = &x
+	; a = index counter
+updateLoop:
+	ld a, (loopControl)
+	cp NUM_INVADERS
+	jp z, input
+	
+	; gets the x coordinate of the invader
+	ld h, 0			; ignore upper bit	
+	ld l, a			; load the current count into the lower bit
+	ld bc, invaderXPositions
+	add hl, bc		; add address to current counter (a + invader_Locations)
+	ld d, (hl)		; x
+	
+	push hl
+	
+	; moves the invader to the left or right
+	ld h, 0			; ignore upper bit	
+	ld l, a			; load the current count into the lower bit
+	ld bc, invaderVelocities
+	add hl, bc		; add address to current counter (a + invader_velocities)
+	ld a, (hl)		; v
+	add a, d		; actual addition
+	ld d, a
+	
+	; shift the invader down if it reaches SHIFT_DOWN_RIGHT
+	ld a, INVDR_SHIFT_RIGHT - 2
+	cp d
+	jp z, shift_invader
+	
+	;shift the invader down if it reaches SHIFT_DOWN_LEFT
+	ld a, INVDR_SHIFT_LEFT - 2
+	cp d
+	jp z, shift_invader
+	
+; after the invaders have been shifted, load their positions back in
+post_shift_invader
+	pop hl
+	
+	ld (hl), d 					; put the x coord back into the array
+	
+	ld a, (loopControl)			; increment the control counter
+	inc a						; ...
+	ld (loopControl), a			; ...
+	jp updateLoop				; loop
+	jp postUpdate
+	
+noUpdate:	; do not update this frame
+; increment updateInvaders counter
+	inc a
+	ld (updateInvaders), a
+	
+; After update, check for collisions with invaders
+postUpdate:
+	; reset counter
+	xor a
+	ld (loopControl), a
+postUpdateLoop:
+	; gets the x coordinate of the invader
+	ld h, 0							; ignore upper bit	
+	ld l, a							; load the current count into the lower bit
+	ld bc, invaderXPositions
+	add hl, bc						; add address to current counter (a + invader_Locations)
+	ld d, (hl)						; x
+
+	call checkInvaderHit		; check for a collision with the bullet
+	call nc, invaderHit
+	
+	ld a, (loopControl)
+	inc a
+	ld (loopControl), a
+	cp NUM_INVADERS
+	jp nz, postUpdateLoop
+	
+; checks for collisions, moves bullets, and generates new bullets if possible
+updateInvaderBullets:
+	xor a
+	ld (loopControl), a
+updateInvaderBulletsLoop:
+; first generate any unused ("loaded") bullets
+	ld h, 0
+	ld l, a
+	ld bc, invaderBulletCanShoot	
+	add hl, bc
+	ld a, (hl)
+	or a
+	call nz, createInvaderBullet	; create the bullet if it can be shot
+	
+	; move the bullet down
+	ld a, (loopControl)
+	ld h, 0
+	ld l, a
+	ld bc, invaderBulletYPositions
+	add hl, bc
+	ld a, (hl)
+	inc a
+	ld (hl), a
+	
+	; move the bullet offscreen if it hits the bottom
+	cp SCREEN_BOTTOM + 4
+	call z, invaderBulletHitBottom
+
+	; check for player collisions
+	ld a, (loopControl)
+	ld h, 0
+	ld l, a
+	ld bc, invaderBulletXPositions
+	add hl, bc
+	ld d, (hl)
+	
+	call checkPlayerHit ; check to see if player was shot by invader bullet
+	jp nc, playerHit
+
+postPlayerHit:
+	; increment the loop control
+	; has to be done this way (same with the jp nc, playerHit above) because game_over might be called
+	; game_over 'rets' and therefore subroutines/call cannot be used or else the program will simply return
+	; from subroutine rather than exit the program
+	ld a, (maxBullets)
+	ld b, a
+	ld a, (loopControl)
+	inc a
+	ld (loopControl), a
+	cp b
+	jp nz, updateInvaderBulletsLoop
+	
+; handle input
+input:
+	ld a, $BF
+	out (1), a
+	
+	in a, (1)
+	cp $DF					; [2nd] key
+	call z, shoot
+	
+	; read up key
+	ld a, $FE
+	out (1), a
+	in a, (1)
+	cp $FB					; [right] arrow key
+	call z, right_pressed
+	
+	in a, (1)
+	cp $FD					; [left] arrow key
+	call z, left_pressed
+	
+	; read for clear
+	ld a, $FD
+	out (1), a
+	in a, (1)
+	cp $BF					; [clear] key
+	jp Z, exit
+	
+	jp main 				; loop
+	
+; -----------------------------------------------------------
+; ----------------------- Subroutines -----------------------
+; -----------------------------------------------------------
+
+; creates an invader bullet 
+createInvaderBullet:
+	; get a random invader to "shoot" the bullet
+	call Rand8 				; store a random number in a
+	ld b, NUM_INVADERS		; make sure it is within range
+	cp b
+	jp nc, createBulletOutOfrange	; if it is not in range, place the bullet somewhere offscreen (meaning the bullet wont be shot)
+	; else
+	; get the x and y coordinates of one of the invaders using the random number as an offset
+	ld h, 0
+	ld l, a
+	ld bc, invaderXPositions
+	add hl, bc
+	ld d, (hl)			; x location of the invader
+	
+	ld h, 0
+	ld l, a
+	ld bc, invaderYPositions
+	add hl, bc
+	ld e, (hl)			; y location of invader
+	
+	ld a, (loopControl) ; get the address of the bullet x position
+	ld h, 0
+	ld l, a
+	ld bc, invaderBulletXPositions
+	add hl, bc
+	ld (hl), d			; store the x location of the invader in the x location of the bullet
+	
+	ld h, 0
+	ld l, a
+	ld bc, invaderBulletYPositions
+	add hl, bc
+	ld (hl), e			; store the y location of the invader in the y location of the bullet
+
+	ld h, 0
+	ld l, a
+	ld bc, invaderBulletCanShoot
+	add hl, bc
+	ld (hl), d			; calculate the address of the can bullet shoot
+	
+	xor a
+	ld (hl), a			; set it to 0
+	ret
+	
+; place the bullet somewhere offscreen
+createBulletOutOfrange:
+	ld a, 100
+	ld (invaderBulletXPositions), a
+	ret
+	
+; puts the bullet offscreen and allows it to be shot again
+invaderBulletHitBottom:
+	; get the address of the bullet x position
+	ld a, (loopControl) 
+	ld h, 0
+	ld l, a
+	ld bc, invaderBulletXPositions
+	add hl, bc
+	ld b, 100
+	ld (hl), b		; move the bullet offscreen
+	
+	ld h, 0
+	ld l, a
+	ld bc, invaderBulletCanShoot
+	add hl, bc
+	ld a, 1
+	ld (hl), a
+	ret
+	
+; *checks for collisions with the player and the current invader bullet
+; assumes d is the x coordinate of the bullet
+; preserves d
+; carry flag is set if there isn't a collision
+; else reset
+checkPlayerHit: 
+	; get y coordinate and store in a
+	ld a, (loopControl)
+	ld h, 0
+	ld l, a
+	ld bc, invaderBulletYPositions
+	add hl, bc
+	ld a, (hl)				; y
+	
+	add a, INVDR_BULLET_HEIGHT		; rect1.height + rect1.y
+	ld b, a
+	ld a, (playerY)
+	ld e, a					; rect2.y
+	ld a, b
+	cp e					; rect1.height + rect1.y > rect2.y
+	ret c
+	
+	sub INVDR_BULLET_HEIGHT		; subtract the height to get just rect1.y
+	ld e, a					; rect1.y
+	ld a, (playerY)		
+	add a, PLAYER_HEIGHT 	; rect2.y + rect2.height
+	cp e					; rect2.height + rect2.y > rect1.y
+	ret c
+	
+	ld a, d
+	add a, INVDR_BULLET_LENGTH		; rect1.length + rect1.x
+	ld b, a
+	ld a, (playerX)
+	ld e, a
+	ld a, b
+	cp e					; rect1.length + rect1.x > rect2.x
+	ret c
+
+	ld a, (playerX)			; rect2.x
+	add a, PLAYER_LENGTH 	; rect2.x + rect2.length
+	cp d					; rect2.length + rect2.x > rect1.x
+	ret c
+	
+	or a ; clears the carry flag
+	ret
+
+; *decrements the player's health and removes the bullet
+; if the player is hit
+playerHit:
+	; decrement the player's health
+	ld a, (playerLives)
+	dec a
+	ld (playerLives), a
+	
+	; check if the player is out of lives
+	or a
+	jp z, game_over
+	
+	; put the bullet offscreen
+	ld a, (loopControl)
+	ld h, 0
+	ld l, a
+	ld bc, invaderBulletXPositions
+	add hl, bc
+	ld b, 100
+	ld (hl), b		; move the bullet offscreen
+
+	ld a, (loopControl) 
+	ld h, 0
+	ld l, a
+	ld bc, invaderBulletCanShoot
+	add hl, bc
+	ld a, 1
+	ld (hl), a
+	
+	jp postPlayerHit
+
+; *checks to see if invader has been shot
+; assumes d is the x coordinate of the invader
+; preserves d
+; carry flag is set if there isn't a collision
+; else reset
+checkInvaderHit: 
+	; get y coordinate and store in e
+	ld a, (loopControl)
+	ld h, 0
+	ld l, a
+	ld bc, invaderYPositions
+	add hl, bc
+	ld a, (hl)				; y
+	
+	add a, INVDR_HEIGHT		; rect1.height + rect1.y
+	ld b, a
+	ld a, (bulletY)
+	ld e, a					; rect2.y
+	ld a, b
+	cp e					; rect1.height + rect1.y > rect2.y
+	ret c
+	
+	sbc a, INVDR_HEIGHT		; subtract the height to get just rect1.y
+	ld e, a					; rect1.y
+	ld a, (bulletY)		
+	add a, BULLET_HEIGHT 	; rect2.y + rect2.height
+	cp e					; rect2.height + rect2.y > rect1.y
+	ret c
+	
+	ld a, d
+	add a, INVDR_LENGTH		; rect1.length + rect1.x
+	ld b, a
+	ld a, (bulletX)
+	ld e, a
+	ld a, b
+	cp e					; rect1.length + rect1.x > rect2.x
+	ret c
+
+	ld a, (bulletX)			; rect2.x
+	add a, BULLET_LENGTH 	; rect2.x + rect2.length
+	cp d					; rect2.length + rect2.x > rect1.x
+	ret c
+	
+	or a
+	ret
+
+; invader is shot
+invaderHit:
+	; move the invader somewhere off-screen
+	ld a, (loopControl)
+	ld h, 0
+	ld l, a
+	ld bc, invaderYPositions
+	add hl, bc
+	ld (hl), 100
+	
+	; make the invader not move
+	ld h, 0
+	ld l, a
+	ld bc, invaderVelocities
+	add hl, bc
+	ld (hl), 0
+	
+	; increase score
+	ld bc, 10
+	ld hl, (score)
+	add hl, bc
+	ld (score), hl
+
+	; move the bullet off-screen
+	ld a, 100
+	ld (bulletX), a
+	; allow the player to shoot again
+	; works as long as a is non zero
+	ld (canShoot), a
+
+	; decrement number of invaders remaining
+	ld a, (invadersRemaining)
+	dec a
+	ld (invadersRemaining), a
+	
+	; if there are no invaders remaining
+	cp 0		; [or a] modifies a
+	jp z, next_level
+	
+post_next_level:
+	; increment number of invaders killed
+	ld a, (invadersKilled)
+	inc a
+	ld (invadersKilled), a
+	
+	; decrease the invaderUpdateInterval if 5 invaders have been killed (invadersKilled is reset after decrementing invaderUpdateInterval)
+	cp 5
+	jp nz, post_next_level_inc_interval
+	
+	ld a, (invaderUpdateInterval)
+	sub 5
+	ld (invaderUpdateInterval), a
+	; reset invadersKilled
+	xor a
+	ld (invadersKilled), a
+	; reset the counter
+	ld (updateInvaders), a
+	
+post_next_level_inc_interval:
+	;; if the number of invaders killed is equal to invaderSpeedUp, speed them up
+	;ld b, a
+	;ld a, (invaderSpeedUp)
+	;cp b
+	;ret nz	; return now if they are not equal
+	;; else
+	;
+	;ld a, (invaderUpdateInterval)	; only decrease if the invaderUpdateInterval is not 0
+	;cp 0	; keep it as a cp 0 because or a modifies a
+	;ret nz
+	;
+	;rra
+	;ld (invaderUpdateInterval), a
+	
+	; increase the maximum number of bullets (keep below 21)
+	ld a, (maxBullets)
+	cp 21
+	ret z
+	inc a
+	ld (maxBullets), a
+	ret
+
+right_pressed:
+	ld a, (playerX) ; make sure the player does not go offscreen
+	cp SCREEN_RIGHT - 7 ; for some reason the "end" of the screen is SCREEN_RIGHT - 7 ...idunno
+	ret z
+	inc a
+	inc a
+	ld (playerX), a
+	ret
+	
+left_pressed:
+	ld a, (playerX)	; make sure the player does not go offscreen
+	cp SCREEN_LEFT
+	ret z
+	sub 2
+	ld (playerX), a
+	ret
+	
+shoot:
+	ld a, (canShoot)
+	or a					; can player shoot? return if (canShoot == 0)
+	ret z					; return if not
+	
+	xor a					; reset canShoot
+	ld (canShoot), a
+	
+	ld a, (playerX)			; get player x location
+	sub 2					; move the bullet over so it is closer to the barrel
+	ld (bulletX), a	
+	ld a, 58				; place the bullet at the player
+	ld (bulletY), a	
+	ret
+	
+bulletHitTop:
+	; also move the bullet so it doesnt rap around
+	ld a, 100
+	ld (bulletX), a
+	ld (canShoot), a 	; re-allow the player to shoot, works as long as a is non-zero
+	ret
+
+shift_invader:	
+	ld a, (loopControl)		; save the loop control
+	push af					; by loading it into a and pushing af's state (popped off at end and reloaded)
+	xor a
+	ld (loopControl), a
+shift_invader_loop:
+	; move the invader down
+	ld h, 0
+	ld l ,a
+	ld bc, invaderYPositions
+	add hl, bc
+	ld a, (hl)
+	add a, 3
+	ld (hl), a
+	
+	; game ends an invader reaches the bottom
+	ld l, SCREEN_BOTTOM - 2
+	cp l
+	jp z, game_over
+	
+	; negate the invader's velocity
+	ld a, (loopControl)
+	ld h, 0
+	ld l, a
+	ld bc, invaderVelocities
+	add hl, bc
+	ld a, (hl)		; v
+	neg
+	ld (hl), a
+	
+	ld a, (loopControl)
+	inc a
+	ld (loopControl), a
+	cp NUM_INVADERS
+	jp nz, shift_invader_loop
+	
+	pop af
+	ld (loopControl), a
+	
+	; increase the speed by decreasing the invaderUpdateInterval
+	; only if the invaderUpdateInterval is not 0
+	ld a, (invaderUpdateInterval)
+	sub 3
+	ld (invaderUpdateInterval), a
+	xor a
+	ld (updateInvaders), a
+	
+end_shift_invader:
+	jp post_shift_invader
+	
+game_over:
+	; clear everything for the menu
+	b_call _GrBufClr
+	b_call _ClrLCDFull
+	
+	jp menu
+	
+exit:
+	b_call _GrBufClr
+	b_call _ClrLCDFull
+	res GrfNoAxis, (IY + GrfDBFlags) ; display axis
+	ld hl, (score)
+	b_call _DispHL
+	ret
+
+next_level:
+	; decrease the invaderUpdateInterval by 5 
+	; makes the invaders have a higher update frequency and are therefore faster
+	ld a, (invaderUpdateInterval)
+	sub 4
+	cp 0
+	jp z, win						; if the update frequency is 0, the player wins
+	ld (invaderUpdateInterval), a
+	call reset_invaders				; reset the invaders
+	jp post_next_level
+
+win:
+	jp game_over
+	
+Rand8:
+	ld a, 0
+	ld	b,a
+	add	a,a
+	add	a,a
+	add	a,b
+	inc	a		; another possibility is ADD A,7
+	ld	(Rand8+1),a
+	ret
+
+; resets the positions and velocities of the invaders
+reset_invaders:
+	; reset the invader update interval
+	ld a, (invaderUpdateInterval)
+	add a, 20
+	ld (invaderUpdateInterval), a
+	
+	xor a
+	ld (loopControl), a
+reset_invaders_loop:
+	ld a, (loopControl)
+	cp NUM_INVADERS
+	jp z, reset_invader_bullets
+	
+	; reset x
+	ld h, 0
+	ld l, a
+	ld bc, invaderXPositionsCOPY ; get a copy of the invader x position
+	add hl, bc
+	ld d, (hl) ; store it in d
+	
+	ld h, 0
+	ld l, a
+	ld bc, invaderXPositions
+	add hl, bc
+	ld (hl), d
+	
+	; reset y
+	ld h, 0
+	ld l, a
+	ld bc, invaderYPositionsCOPY ; get a copy of the invader y position
+	add hl, bc
+	ld d, (hl) ; store it in d
+	
+	ld h, 0
+	ld l, a
+	ld bc, invaderYPositions
+	add hl, bc
+	ld (hl), d
+	
+	; reset invaderVelocities
+	ld h, 0
+	ld l, a
+	ld bc, invaderVelocities
+	add hl, bc
+	ld (hl), 1		; reset to 1
+	
+	ld a, (loopControl)
+	inc a
+	ld (loopControl), a
+	jp reset_invaders_loop
+	
+; reset the invader bullet positions
+reset_invader_bullets:
+	xor a
+	ld (loopControl), a
+reset_invader_bullets_loop:
+	ld a, (loopControl)
+	cp NUM_INVADERS
+	ret z
+	
+	; reset y position
+	ld h, 0
+	ld l, a
+	ld bc, invaderBulletYPositions
+	add hl, bc
+	ld (hl), 0	; bullets start at (100, 0)
+	
+	ld h, 0
+	ld l, a
+	ld bc, invaderBulletXPositions
+	add hl, bc
+	ld (hl), 100	; bullets start at (100, 0)
+	
+	;ld h, 0
+	;ld l, a
+	;ld bc, invaderBulletCanShoot
+	;add hl, bc
+	;ld (hl), 1
+	
+	ld a, (loopControl)
+	inc a
+	ld (loopControl), a
+	jp reset_invader_bullets_loop
+	
+; ----------------------------------------------------
+; ------------------ DATA / VARIABLES ----------------
+; ----------------------------------------------------
+	
+player:
+	.db		%0001000
+	.db		%0001000
+	.db		%0011100
+	.db		%0111110
+	.db		%1111111
+	.db		%1111111
+	
+lifeBarPiece:
+	.db		%111
+	.db		%101
+	.db		%111
+	
+bulletWallHigh:
+	.db 	%1111
+	.db		%1111
+	
+bulletWallHalf:
+	.db		%1101
+	.db		%0110
+	
+bulletWallLow:
+	.db		%0010
+	.db		%1001
+	
+bullet:
+	.db 	%11
+	.db		%11
+	.db		%11
+
+;invaderBullet:
+;	.db		%01
+;	.db		%10
+;	.db		%01
+	
+invader1:
+	.db		%11111
+	.db		%10101
+	.db		%01010
+
+dankMemerStr:
+	.db "by Dylan Belka", 0
+	
+scoreStr:
+	.db	"Score: ", 0
+	
+startStr:
+	.db LlBrack, "Enter] - Play", 0	; left bracket as ascii gets converted to theta ( '[' = 0x5B in ascii and 'theta' = 0x5B in tios)
+
+quitStr:
+	.db LlBrack, "Clear] - Quit", 0
+	
+nameStr:
+	.db "INVADERS", 0
+
+playerY				equ appbackupscreen			; player y coordinate (const)
+playerX				equ appbackupscreen+1		; player x coordinate
+	
+bulletY				equ appbackupscreen+3		; bullet y coordinate
+bulletX				equ appbackupscreen+4		; bullet x coordinate
+
+canShoot			equ appbackupscreen+16		; can player shoot?
+
+loopControl			equ appbackupscreen+6		; loop control variable 
+
+invadersRemaining 	equ appbackupscreen+8		; number of invaders left to kill (used for winning)
+
+playerLives 		equ appbackupscreen+10		; number of lives the player has left
+	
+updateInvaders		equ appbackupscreen+12		; counter that counts to invaderUpdateInterval - when it reaches invaderUpdateInterval, the invaders are updated
+												; must be greater than 0
+
+invaderUpdateInterval 	equ appbackupscreen+14	; number of frames in between each update
+
+invaderSpeedUp		equ	appbackupscreen+18		; number of frames between each update decreases each time the number of invaders killed hits this number
+												; decremented each level
+
+invadersKilled		equ appbackupscreen+20		; number of invaders killed this level
+
+score				equ appbackupscreen+22		; player score
+
+maxBullets			equ appbackupscreen+24		; max number of bullets that can be shot (increased after a certain number of invaders is killed to make the game harder)
+
+; 8 invaders per line
+invaderXPositions:
+	.db		4, 15, 26, 37, 48, 59, 70, 81		, 4, 15, 26, 37, 48, 59, 70, 81			, 4, 15, 26, 37, 48, 59, 70, 81
+	
+invaderYPositions:
+	.db		10, 10, 10, 10, 10, 10, 10, 10		, 16, 16, 16, 16, 16, 16, 16, 16		, 22, 22, 22, 22, 22, 22, 22, 22
+	
+invaderVelocities:
+	.db		1, 1, 1, 1, 1, 1, 1, 1				,1, 1, 1, 1, 1, 1, 1, 1				,1, 1, 1, 1, 1, 1, 1, 1
+	
+invaderBulletXPositions:
+	.db		100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100
+
+invaderBulletYPositions:
+	.db		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+	
+invaderBulletCanShoot:
+	.db		1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1
+	
+invaderXPositionsCOPY:
+	.db		4, 15, 26, 37, 48, 59, 70, 81		, 4, 15, 26, 37, 48, 59, 70, 81			, 4, 15, 26, 37, 48, 59, 70, 81
+	
+invaderYPositionsCOPY:
+	.db		10, 10, 10, 10, 10, 10, 10, 10		, 16, 16, 16, 16, 16, 16, 16, 16		, 22, 22, 22, 22, 22, 22, 22, 22
+	
+	; each bullet wall section is made of 3 subsections that each have their own health
+bulletWallHealth:
+	.db		16, 16, 16		, 16, 16, 16		, 16, 16, 16
+	
+bulletWallXPositions:
+	.db		10, 14, 18		, 38, 42, 46		, 66, 70, 74
+	
+; -----------------------------------------------------------
+; ----------------------- DRAWING ---------------------------
+; -----------------------------------------------------------
+
+drawWalls:
+	xor a
+	ld (loopControl), a
+drawWallsLoop:
+	; loop control
+	ld a, (loopControl)
+	cp NUM_WALLS
+	ret z
+	
+	; get the health of the wall
+	; draw the correct wall based on its health
+	ld h, 0
+	ld l, a
+	ld bc, bulletWallHealth
+	add hl, bc
+	ld a, (hl)		; a = wall health
+	
+	cp WALL_HEALTH_HIGH
+	jp nc, drawWallHealthHigh
+	
+	cp WALL_HEALTH_HALF	
+	jp nc, drawWallHealthHalf
+	
+	; else
+	ld ix, bulletWallLow
+	
+postDrawHealth:
+	; get x coord
+	ld a, (loopControl)
+	ld h, 0
+	ld l, a
+	ld bc, bulletWallXPositions
+	add hl, bc
+	ld d, (hl)		; d = wall x
+
+	ld e, WALL_Y_POSITION
+	ld b, 2
+	call ClipSprXOR
+	
+	ld a, (loopControl)
+	inc a
+	ld (loopControl), a
+	jp drawWallsLoop
+	
+	ret
+	
+drawWallHealthHigh:
+	ld ix, bulletWallHigh
+	jp postDrawHealth
+
+drawWallHealthHalf
+	ld ix, bulletWallHalf
+	jp postDrawHealth
+
+drawLives:
+	xor a
+	ld (loopControl), a
+drawLivesLoop:
+	; loop control
+	ld a, (loopControl)
+	ld b, a
+	ld a, (playerLives)
+	cp b
+	ret z
+	
+	ld ix, lifeBarPiece
+	; calculate positions of lives
+	xor a
+	rl b
+	rl b
+	add a, b
+	ld d, a
+	ld e, 2
+	ld b, 3
+	
+	call ClipSprXOR
+	
+	ld a, (loopControl)
+	inc a
+	ld (loopControl), a
+	jp drawLivesLoop
+	
+drawInvaderBullets:
+	xor a
+	ld (loopControl), a
+drawInvaderBulletsLoop:
+	ld a, (maxBullets)
+	ld b, a
+	ld a, (loopControl)
+	cp b
+	ret z
+	
+	ld h, 0
+	ld l, a
+	ld bc, invaderBulletXPositions
+	add hl, bc
+	ld d, (hl)
+	
+	ld h, 0
+	ld l, a
+	ld bc, invaderBulletYPositions
+	add hl, bc
+	ld e, (hl)
+	
+	ld b, 3
+	ld ix, bullet
+	call ClipSprXOR
+	ld a, (loopControl)
+	inc a
+	ld (loopControl), a
+	jp drawInvaderBulletsLoop
+	
+drawInvaders:	
+	xor a
+	ld (loopControl), a
+invaderDrawLoop:
+	ld a, (loopControl)
+	cp NUM_INVADERS
+	ret z
+	
+	; calculate address
+	; essentially does something like this:
+	; de = locs[a + &invaderXLocations][a + &invaderYLocations]
+	ld h, 0						; ignore upper bit	
+	ld l, a						; load the current count into the lower bit
+	ld bc, invaderXPositions
+	add hl, bc					; add address to current counter (a + invader_Locations)
+	ld d, (hl)					; x
+	
+	ld h, 0
+	ld l, a
+	ld bc, invaderYPositions
+	add hl, bc
+	ld e, (hl)					; y
+	
+	ld b, 3						; height
+	ld ix, invader1
+	call ClipSprXOR
+	ld a, (loopControl)			; increment the control counter
+	inc a						; ...
+	ld (loopControl), a			; ...
+	jp invaderDrawLoop
+	
+drawBullet:
+	ld de, (bulletY)
+	ld b, 3
+	ld ix, bullet
+	jp ClipSprXOR
+	
+drawPlayer:
+	ld de, (playerY)
+	ld b, 6
+	ld ix, player
+	
+ClipSprXOR:
+; D = xpos
+; E = ypos
+; B = height
+; IX = image address
+; Start by doing vertical clipping
+    LD     A, %11111111         ; Reset clipping mask
+    LD     (clip_mask), A
+    LD     A, E                 ; If ypos is negative
+    OR     A                    ; try clipping the top
+    jp     M, ClipTop           ;
+ 
+    SUB    64                   ; If ypos is >= 64
+    RET    NC                   ; sprite is off-screen
+
+    NEG                         ; If (64 - ypos) > height
+    CP     B                    ; don't need to clip
+    jp     NC, VertClipDone     ; 
+
+    LD     B, A                 ; Do bottom clipping by
+    jp     VertClipDone         ; setting height to (64 - ypos)
+
+ClipTop:
+    LD     A, B                 ; If ypos <= -height
+    NEG                         ; sprite is off-screen
+    SUB    E                    ;
+    RET    NC                   ;
+
+    PUSH   AF
+    ADD    A, B                 ; Get the number of clipped rows
+    LD     E, 0                 ; Set ypos to 0 (top of screen)
+    LD     B, E                 ; Advance image data pointer
+    LD     C, A                 ;
+    ADD    IX, BC               ;
+    POP    AF
+    NEG                         ; Get the number of visible rows
+    LD     B, A                 ; and set as height
+
+VertClipDone:
+; Now we're doing horizontal clipping
+    LD     C, 0                 ; Reset correction factor
+    LD     A, D
+
+    CP     -7                   ; If 0 > xpos >= -7
+    jp     NC, ClipLeft         ; clip the left side
+
+    CP     96                   ; If xpos >= 96
+    RET    NC                   ; sprite is off-screen
+
+    CP     89                   ; If 0 <= xpos < 89
+    jp     C, HorizClipDone     ; don't need to clip
+
+ClipRight:
+    AND    7                    ; Determine the clipping mask
+    LD     C, A
+    LD     A, %11111111
+FindRightMask:
+    ADD    A, A
+    DEC    C
+    jp     NZ, FindRightMask
+    LD     (clip_mask), A
+    LD     A, D
+    jp     HorizClipDone
+
+ClipLeft:
+    AND    7                    ; Determine the clipping mask
+    LD     C, A
+    LD     A, %11111111
+FindLeftMask:
+    ADD    A, A
+    DEC    C
+    jp     NZ, FindLeftMask
+    CPL
+    LD     (clip_mask), A
+    LD     A, D
+    ADD    A, 96                ; Set xpos so sprite will "spill over"
+    LD     C, 12                ; Set correction
+
+HorizClipDone:
+; A = xpos
+; E = ypos
+; B = height
+; IX = image address
+
+; Now we can finally display the sprite.
+    LD     H, 0
+    LD     D, H
+    LD     L, E
+    ADD    HL, HL
+    ADD    HL, DE
+    ADD    HL, HL
+    ADD    HL, HL
+
+    LD     E, A
+    SRL    E
+    SRL    E
+    SRL    E
+    ADD    HL, DE
+
+    LD     DE, PlotSScreen
+    ADD    HL, DE
+
+    LD     D, 0                 ; Correct graph buffer address
+    LD     E, C                 ; if clipping the left side
+    SBC    HL, DE               ;
+
+    AND    7
+    jp     Z, _Aligned
+
+    LD     C, A
+    LD     DE, 11
+
+_RowLoop:
+    PUSH   BC
+    LD     B, C
+    LD     A, (clip_mask)       ; Mask out the part of the sprite
+    AND    (IX)                 ; to be horizontally clipped
+    LD     C, 0
+
+_ShiftLoop:
+    SRL    A
+    RR     C
+    DJNZ   _ShiftLoop
+
+    XOR    (HL)
+    LD     (HL), A
+
+    INC    HL
+    LD     A, C
+    XOR    (HL)
+    LD     (HL), A
+
+    ADD    HL, DE
+    INC    IX
+    POP    BC
+    DJNZ   _RowLoop
+    RET
+
+_Aligned:
+    LD     DE, 12
+
+_PutLoop:
+    LD     A, (IX)
+    XOR    (HL)
+    LD     (HL), A
+    INC    IX
+    ADD    HL, DE
+    DJNZ   _PutLoop
+    RET
+
+clip_mask:      .DB     0
