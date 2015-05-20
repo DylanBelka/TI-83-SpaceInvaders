@@ -192,7 +192,7 @@ init:	; clear buffers, display, initializes sprite values
 
 main:
 draw:
-	b_call _GrBufClr ; clear the screen
+	call clrGrBuf	; clear the screen
 	; draw everything
 	call drawPlayer
 	call drawBullet
@@ -908,11 +908,6 @@ bullet:
 	.db 	%11
 	.db		%11
 	.db		%11
-
-;invaderBullet:
-;	.db		%01
-;	.db		%10
-;	.db		%01
 	
 invader1:
 	.db		%11111
@@ -998,6 +993,20 @@ bulletWallXPositions:
 ; ----------------------- DRAWING ---------------------------
 ; -----------------------------------------------------------
 
+clrGrBuf:
+	ld hl, PlotSScreen
+	ld d, $3
+	ld e, $00
+	xor a
+clrGrBufLoop:
+	ld (hl), a
+	inc hl
+	dec e
+	jr nz, clrGrBufLoop
+	dec d
+	jr nz, clrGrBufLoop
+	ret
+
 drawWalls:
 	xor a
 	ld (loopControl), a
@@ -1041,7 +1050,6 @@ postDrawHealth:
 	inc a
 	ld (loopControl), a
 	jp drawWallsLoop
-	
 	ret
 	
 drawWallHealthHigh:
@@ -1120,7 +1128,7 @@ invaderDrawLoop:
 	
 	; calculate address
 	; essentially does something like this:
-	; de = locs[a + &invaderXLocations][a + &invaderYLocations]
+	; de = mem[a + &invaderXLocations][a + &invaderYLocations]
 	ld h, 0						; ignore upper bit	
 	ld l, a						; load the current count into the lower bit
 	ld bc, invaderXPositions
